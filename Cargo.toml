@@ -7,5 +7,5 @@ edition = "2018"
 [dependencies]
 failure = "0.1"
 rand = "0.6"
-termion = "1.5"
-tui = "0.6.2"
+crossterm = "0.10"
+tui = { version = "0.6.2", default-features = false, features = ["crossterm"] }

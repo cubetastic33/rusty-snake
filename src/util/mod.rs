@@ -1,5 +1,3 @@
-pub mod event;
-
 use rand::distributions::{Distribution, Uniform};
 use rand::rngs::ThreadRng;
 

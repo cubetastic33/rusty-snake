@@ -1,19 +1,23 @@
 #[allow(dead_code)]
 mod util;
 
-use std::io;
 use std::time::Duration;
+use std::sync::mpsc;
+use std::thread;
 
-use termion::screen::AlternateScreen;
-use termion::{event::Key, raw::IntoRawMode};
+use crossterm::{input, AlternateScreen, InputEvent, KeyEvent};
 use tui::Terminal;
-use tui::backend::TermionBackend;
+use tui::backend::CrosstermBackend;
 use tui::style::{Style, Color};
 use tui::layout::{Constraint, Layout};
 use tui::widgets::{Widget, Block, Borders, SelectableList, canvas::Canvas};
 use rand::prelude::*;
 
-use crate::util::event::{Config, Event, Events};
+enum Event<I> {
+    Input(I),
+    Tick,
+}
+
 use ItemType::*;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -276,18 +280,10 @@ impl App {
 }
 
 fn main() -> Result<(), failure::Error> {
-    let stdout = io::stdout().into_raw_mode()?;
-    let stdout = AlternateScreen::from(stdout);
-    let backend = TermionBackend::new(stdout);
+    let screen = AlternateScreen::to_alternate(true)?;
+    let backend = CrosstermBackend::with_alternate_screen(screen)?;
     let mut terminal = Terminal::new(backend)?;
     terminal.hide_cursor()?;
-
-    // Setup event handlers
-    let config = Config {
-        tick_rate: Duration::from_millis(75),
-        ..Default::default()
-    };
-    let events = Events::with_config(config);
 
     // Create app instance
     let mut app = App::new();
@@ -297,6 +293,41 @@ fn main() -> Result<(), failure::Error> {
     let mut need_items_in = 0;
     // Variable to keep track of the selected option in the menu
     let mut selected_option = 0;
+
+    // Setup input handling
+    let (tx, rx) = mpsc::channel();
+    {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let input = input();
+            let reader = input.read_sync();
+            for event in reader {
+                match event {
+                    InputEvent::Keyboard(key) => {
+                        if let Err(_) = tx.send(Event::Input(key.clone())) {
+                            return;
+                        }
+                        if key == KeyEvent::Char('q') {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let tx = tx.clone();
+            loop {
+                tx.send(Event::Tick).unwrap();
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
+
+    terminal.clear()?;
 
     // Main app loop
     loop {
@@ -360,25 +391,25 @@ fn main() -> Result<(), failure::Error> {
             })?;
 
             let current_heading = app.segments[app.segments.len() - 1].direction;
-            match events.next()? {
+            match rx.recv()? {
                 Event::Input(input) => match input {
-                    Key::Char('q') => {
+                    KeyEvent::Char('q') => {
                         // Quit the program
                         break;
                     }
-                    Key::Up => if current_heading != Direction::Down {
+                    KeyEvent::Up => if current_heading != Direction::Down {
                         // Change the snake's head's direction to up
                         app.set_heading(Direction::Up)
                     }
-                    Key::Right => if current_heading != Direction::Left {
+                    KeyEvent::Right => if current_heading != Direction::Left {
                         // Change the snake's head's direction to right
                         app.set_heading(Direction::Right)
                     }
-                    Key::Down => if current_heading != Direction::Up {
+                    KeyEvent::Down => if current_heading != Direction::Up {
                         // Change the snake's head's direction to down
                         app.set_heading(Direction::Down)
                     }
-                    Key::Left => if current_heading != Direction::Right {
+                    KeyEvent::Left => if current_heading != Direction::Right {
                         // Change the snake's head's direction to left
                         app.set_heading(Direction::Left)
                     }
@@ -407,23 +438,23 @@ fn main() -> Result<(), failure::Error> {
                     .render(&mut f, chunks[0]);
             })?;
 
-            match events.next()? {
+            match rx.recv()? {
                 Event::Input(input) => match input {
-                    Key::Char('q') => {
+                    KeyEvent::Char('q') => {
                         // Quit the program
                         break;
                     }
-                    Key::Char('n') => {
+                    KeyEvent::Char('n') => {
                         // Start a new game
                         app.playing = true;
                         game_in_progress = true;
                     }
-                    Key::Up => selected_option = if selected_option > 0 {
+                    KeyEvent::Up => selected_option = if selected_option > 0 {
                         selected_option - 1
                     } else {
                         menu_items.len() - 1
                     },
-                    Key::Down => selected_option = if selected_option >= menu_items.len() - 1 {
+                    KeyEvent::Down => selected_option = if selected_option >= menu_items.len() - 1 {
                         0
                     } else {
                         selected_option + 1
